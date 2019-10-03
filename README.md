@@ -1,2 +1,3 @@
-# racket-som
-A Simple Object Model interpreter for racket
+som
+===
+README text here.
