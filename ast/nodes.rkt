@@ -1,6 +1,6 @@
 #lang racket
 (require racket/generic
-         "context.rkt"
+      ;   "../compiler/context.rkt"
       ;   "frame.rkt"
          )
 (provide (all-defined-out))
@@ -36,14 +36,14 @@
 (define-generics inlineable
   (inline inlineable mgctx))
 
-(struct Node (children))
+(struct Node ())
 (struct ExecutableNode Node ())
 (struct RootNode ExecutableNode (callTarget frameDescriptor lock))
 (struct Invokable RootNode (expression body belongsTo))
 (struct Primitive Invokable ())
 (struct Method Invokable (scope))
 
-(struct SOMNode Node (sourceSection))
+(struct SOMNode Node ())
 (struct ExpressionNode SOMNode ()
   #:methods gen:executable
   [(define (execute executable frame) (error "not implemented"))]
@@ -101,7 +101,7 @@
              [else (let ([g (getGlobal name)])
                       (if (null? g)
                           (CachedGlobalReadNode name g)
-                          '();(executeUnknownGlobal self frame) som.vm.constants.Nil
+                          NilObject
                           ))]
              )
      ))]
@@ -112,7 +112,7 @@
   [(define (execute self frame) (CachedGlobalReadNode-global self))])
 (struct TrueGlobalNode GlobalNode () #:methods gen:executable [(define (execute self frame) #t)])
 (struct FalseGlobalNode GlobalNode () #:methods gen:executable [(define (execute self frame) #f)])
-(struct NilGlobalNode GlobalNode () #:methods gen:executable [(define (execute self frame) '())])
+(struct NilGlobalNode GlobalNode () #:methods gen:executable [(define (execute self frame) NilObject)])
 
 (struct ReturnLocalNode ExpressionWithTagsNode (frameOnStackMarker)
   #:methods gen:executable
@@ -190,7 +190,7 @@
   #:methods gen:preevaluatedExpression 
   [(define (doPreEvaluated self frame args) (execute self frame))]
   #:methods gen:inlineable
-  [(define (inline self) self)]
+  [(define (inline self node) self)]
   )
 (struct IntegerLiteralNode LiteralNode (value)
   #:methods gen:executable [(define (execute self frame) (IntegerLiteralNode-value self))]
@@ -232,6 +232,9 @@
 
 (struct ContextualNode ExpressionWithTagsNode (contextLevel frameType))
 (struct UninitializedVariableNode ContextualNode (variable)
+  #:methods gen:executable [(define (execute self frame) (error "implement me"))]
+  )
+(struct ReturnNonLocalNode ContextualNode (expression frame)
   #:methods gen:executable [(define (execute self frame) (error "implement me"))]
   )
 (struct UninitializedVariableReadNode UninitializedVariableNode ())

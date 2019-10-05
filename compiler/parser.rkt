@@ -9,15 +9,17 @@
 (define LONG_MAX 9223372036854775807)
 (define LONG_MIN -9223372036854775808)
 (define singleOps '(Not And Or Star Div Mod Plus Equal More Less Comma Minus At Per NONE))
-(define binaryOps '(Or Comma Minius Equal Not And Or Star Div Mod Plus Equal More Less Comma At Per NONE))
+(define binaryOps '(Or Comma Minus Equal Not And Or Star Div Mod Plus Equal More Less Comma At Per NONE))
 (define keywordSelectorOps '(Keyword KeywordSequence))
 (define (member? item lst) (sequence-ormap (lambda (i) (equal? item i)) lst))
+
+(define-struct (parse-exception exn:fail:user) ())
 
 (define curr-pos (position-token 'NONE (position 0 0 0) (position 0 0 0)))
 (define peek-pos (position-token 'NONE (position 0 0 0) (position 0 0 0)))
 (define sym #f)
 (define text #f)
-(define port (open-input-file "/home/eno/dev/TruffleMATE/Smalltalk/Array.som"))
+(define port (open-input-file "../SOM/Smalltalk/SortedCollection.som"))
 
 (define nxt (lex port))
 (define (next)
@@ -48,18 +50,35 @@
           [offset (position-offset (position-token-start-pos curr-pos))]
           [col (position-col (position-token-start-pos curr-pos))]
           [line (position-line (position-token-start-pos curr-pos))])
-      (displayln (string-join `("error from" ,func  ,(~a sym) "on line" ,(~a line) )))
+      (displayln (string-join `("error from" ,func  ,(~a sym) ,(~a text) "on line" ,(~a line) )))
       (file-position port (- offset col))
       (displayln  (read-line port))
       (displayln (string-append (make-string col #\-) "^"))
       (file-position port loc)
-      (error msg)
+       (error msg)
+    ;(raise (make-parse-exception msg (current-continuation-marks)) )
     ))
 (define (expect token [function "unknown"] [errormsg "parse error"])
   (when (not (accept token))
-    (error (string-join `("error from" ,function "expected" ,(~a token) "got" ,(~a sym) "on line" ,(~a (position-token-start-pos curr-pos)) )) function)
+    (let ([loc (file-position port)]
+          [offset (position-offset (position-token-start-pos curr-pos))]
+          [col (position-col (position-token-start-pos curr-pos))]
+          [line (position-line (position-token-start-pos curr-pos))])
+      (displayln (string-join `("error from" ,function "expected" ,(~a token) "got" ,(~a sym) "on line" ,(~a line) ) ))
+      (file-position port (- offset col))
+      (displayln  (read-line port))
+      (displayln (string-append (make-string col #\-) "^"))
+      (file-position port loc)
+      (error errormsg)
+    ;(raise (make-parse-exception msg (current-continuation-marks)) )
+    )
+    ;(error (string-join `("error from" ,function "expected" ,(~a token) "got" ,(~a sym) "on line" ,(position-line (position-token-start-pos curr-pos)) )) function)
+    ;(raise (make-parse-exception (string-join `("error from" ,function "expected" ,(~a token) "got" ,(~a sym) "on line" ,(~a (position-token-start-pos curr-pos)) )) (current-continuation-marks)))
     ))
-
+(define (expectOneOf token lst)
+  (when (not (acceptOneOf token lst))
+    (parser-error (string-join (string-append "expectOneOf " (~a token)) "expectOneOf"))))
+    
 (define (classDef cgctx)
   (expect 'Identifier "classDef")
   (send cgctx set-name text)
@@ -82,8 +101,10 @@
     (let* ([mgctx (new method-generation-context% [classCtx cgctx])]
              [methodBody (method mgctx)]
              [method (send mgctx assemble methodBody)])
+      
         (send cgctx addClassMethod method)
-      )))
+      ))
+    )
   (expect 'EndTerm "classDef"))
 
 (define (superclass cgctx)
@@ -99,28 +120,22 @@
         (send cgctx set-ClassFields (send superclass get-ClassFields));!!
       ))))
 (define (instanceFields cgctx)
-  (define (loop)
-    (when (identifier? sym)
-      (send cgctx addInstanceField text)
-      (loop)))
   (when (accept 'Or)
-    (expect 'Identifier "instanceFields")
-    (loop)
-    (expect 'Or "instanceFields")))
+    (begin
+      (do () ((not (identifier? sym)))
+        (send cgctx addInstanceField (variable)))
+      (expect 'Or "instanceFields"))))
 (define (classFields cgctx)
-  (define (loop)
-    (when (identifier? sym)
-      (send cgctx addClassField text)
-      (loop)))
   (when (accept 'Or)
-    (expect 'Identifier "classFields")
-    (loop)
-    (expect 'Or "classFields")))
+    (begin
+      (do () ((not (identifier? sym)))
+        (send cgctx addClassField (variable)))
+      (expect 'Or "classFields"))))
 (define (method mgctx)
-  (displayln `(method: ,text))
+  ;(displayln `(method: ,text))
   (pattern mgctx)
   
-  (expect 'Equal "method")
+  (expect 'Equal "method" (string-join `("method:" ,(~a text))))
   (if (equal? sym 'Primitive)
       (begin
         (send mgctx markAsPrimitive)
@@ -130,21 +145,24 @@
 (define (primitiveBlock) (expect 'Primitive "primitiveBlock"))
 (define (pattern mgctx)
   ;(send mgctx addArgumentIfAbsent "self")
-  ;(displayln `(pattern: ,sym))
+  ;(displayln `(pattern: ,sym ,text))
   (send mgctx addArgument "self")
   (match sym
-    ['Identifier (identifier)]
+    ['Identifier (unaryPattern mgctx)]
     ['Primitive (unaryPattern mgctx)]
     ['Keyword (keywordPattern mgctx)]
     [_ (binaryPattern mgctx)]))
 (define (unaryPattern mgctx)
+  ;(displayln `(unaryPattern: ,sym ,text))
   (send mgctx setSignature (unarySelector)))
 (define (binaryPattern mgctx)
+  ;(displayln `(binaryPattern: ,sym ,text))
   (send mgctx setSignature (binarySelector))
   ;(send mgctx addArgumentIfAbsent (argument))
   (send mgctx addArgument (argument))
   )
 (define (keywordPattern mgctx)
+  ;(displayln `(keywordPattern: ,sym ,text))
   (define str "")
   (do ()
     ((not (equal? sym 'Keyword)))
@@ -221,9 +239,9 @@
       (send mgctx getNonLocalReturn exp)
       exp))
 (define (expression mgctx)
-  ;(displayln `(before: ,sym ))
+  ;(displayln `(before: ,sym ,text))
   (define p (peek))
-  ;(displayln `(expression peek: ,p sym: ,sym ))
+  ;(displayln `(expression peek: ,p sym: ,sym text: ,text))
   (if (equal? p 'Assign)
       (assignation mgctx)
       (evaluation mgctx)))
@@ -232,12 +250,10 @@
   ;(displayln `(assignments ,sym ,text))
   (when (not (identifier? sym))
     (parser-error (string-append "Assignments should always target variables or fields, but found a " (symbol->string sym)) "assignments"))
-  (define variable (assignment))
-  (define p (peek))
-  (define value (if (equal? p 'Assign)
-                    (assignments mgctx)
-                    (evaluation mgctx)))
-  (variableWrite mgctx variable value))
+  (let* ([variable (assignment)]
+         [p (peek)]
+         [value (if (equal? p 'Assign) (assignments mgctx) (evaluation mgctx))])
+    (variableWrite mgctx variable value)))
 (define (assignment)
   (define v (variable))
   (expect 'Assign "assignment")
@@ -248,21 +264,21 @@
   (do () ((not (accept 'SemiColon)))
     (set expressions (cons (messages mgctx receiver) expressions)))
   ;(createCascadeMessageSend receiver expressions)
-  (CascadeMessageSendNode receiver expressions)
+  (CascadeMessageSendNode 0 receiver expressions)
   )
 (define (evaluation mgctx)
   ;(displayln `(evaluation ,sym ,text))
-  (let ([exp (primary mgctx)])
-    (when (or (identifier? sym) (equal? sym 'Keyword) (equal? sym 'OperatorSequence) (member? sym binaryOps))
-      (let ([receiver exp])
-        (if (equal? sym 'SemiColon)
-            (set! exp (cascadeMessages mgctx exp receiver))
-            (set! exp (messages mgctx exp)))))
-    exp))
+  (define exp (primary mgctx))
+  (when (or (identifier? sym) (equal? sym 'Keyword) (equal? sym 'OperatorSequence) (member? sym binaryOps))
+    (let ([receiver exp])
+      (set! exp (messages mgctx exp))
+      (when (equal? sym 'SemiColon)
+        (set! exp (cascadeMessages mgctx exp receiver)))))
+  exp)
 (define (primary mgctx)
-  ;(displayln `(primary ,sym))
+  ;(displayln `(primary ,sym ,text))
   (match sym
-    ['Identifier (void)]
+    ['Identifier (variableRead mgctx (variable))]
     ['Primitive (variableRead mgctx (variable))]
     ['NewTerm (nestedTerm mgctx)]
     ['NewBlock (let* ([bgcxt (new method-generation-context% [classCtx (send mgctx getHolder)] [outerCtx mgctx])]
@@ -274,8 +290,8 @@
                      (BlockNode 0 blockMethod (send (send mgctx getClassCtx) get-name))))]
     [_ (literal)]))
 (define (variable) (identifier))
-(define (identifier? sym)
-  (or (equal? sym 'Identifier) (equal? sym 'Primitive)))
+(define (identifier? s)
+  (or (equal? s 'Identifier) (equal? s 'Primitive)))
 (define (messages mgctx receiver)
   ;(displayln `(messages ,sym ,text))
   (define msg #f)
@@ -324,7 +340,7 @@
       (begin
         (set! kw (string-append (~a (keyword)) kw))
         (set! arguments (cons (formula mgctx) arguments))))
-    ;(displayln `(keywordMessage ,sym ,text kw: ,kw))
+    ;(displayln `(keywordMessage ,sym ,text kw: ,kw length: ,(length arguments)))
     (if (equal? (length arguments) 2)
         (set! return (match kw
           ["ifTrue:" (IfInlinedLiteralNode (car arguments) #t (inline (LiteralNode (cadr arguments))) (cadr arguments))]
@@ -348,9 +364,12 @@
             ))
     return))
 (define (formula mgctx)
+  ;(displayln `(formula ,sym ,text))
   (define operand (binaryOperand mgctx))
+  ;(displayln `(formula operand: ,operand ,sym ,text ,(member? sym binaryOps)))
   (do () ((not (or (equal? sym 'OperatorSequence) (member? sym binaryOps))))
     (set! operand (binaryMessage mgctx operand)))
+  ;(displayln `(formulaEnd operand: ,operand ,sym ,text ,(member? sym binaryOps)))
   operand)
 (define (nestedTerm mgctx)
   (expect 'NewTerm "nestedTerm")
@@ -361,10 +380,10 @@
   ;(displayln `(literal ,sym ,text))
   (match sym
     ['Pound (if (equal? (peek) 'NewTerm)
-                                  (begin (expect 'Pound "literal") (ArrayLiteralNode (literalArray)))
-                                  (SymbolLiteralNode (literalSymbol)))]
+                                  (begin (expect 'Pound "literal") (ArrayLiteralNode 0 (literalArray)))
+                                  (SymbolLiteralNode 0 (literalSymbol)))]
     ['STString (StringLiteralNode 0 (literalString))]
-    ['STChar (CharLiteralNode (literalChar))]
+    ['STChar (CharLiteralNode 0 (literalChar))]
     [_ (let* ([isNegative? (isNegativeNumber)])
          ;(displayln `(literal-number ,sym ,text ,value))
          (if (equal? sym 'Integer)
@@ -386,30 +405,33 @@
     (expect 'Integer "literalInteger")
     i))
 (define (literalDouble isNegative)
+  (displayln `(literalDouble ,sym ,text))
   (let ([d text])
     (when isNegative
       (set! d (- 0.0 d)))
     (expect 'Double "literalDouble")
     d))
 (define (literalSymbol)
-  (define sym #f)
+  ;(displayln `(literalSymbol ,sym ,text))
   (expect 'Pound "literalSymbol")
   (if (equal? sym 'STString)
-      text
+      (string)
       (selector)))
 (define (literalArray)
   (define literals '())
   (expect 'NewTerm "literalArray")
-  (do () ((not (equal? (sym 'EndTerm))))
+  (do () ((equal? sym 'EndTerm))
     (set! literals (cons (getObjectForCurrentLiteral) literals)))
-  (expect 'EndTerm "literalArray")
-  literals)
+  
+  (expect 'EndTerm "literalArray"))
+  
 (define (getObjectForCurrentLiteral)
+  ;(displayln `(gofc ,sym ,text))
   (match sym
     ['NewTerm (literalArray)]
     ['Pound (if (equal? (peek) 'NewTerm)
-                (begin (expect 'Pound "getObjectForCurrentLiteral"))
-                (literalArray))]
+                (begin  (expect 'Pound "getObjectForCurrentLiteral")  (literalArray))
+                (literalSymbol))]
     ['STString (literalString)]
     ['STChar (literalChar)]
     ['Integer (literalInteger (isNegativeNumber))]
@@ -418,27 +440,29 @@
                      (begin (selector) "NIL");;fixme
                      (if (equal? text "true")
                          (begin (selector) (send universe getTrueObject))
-                         (if (equal? "false")
+                         (if (equal? text "false")
                              (begin (selector) (send universe getTrueObject))
                              (selector))))]
-    ['OperatorSequence (void)]
-    ['Keyword (void)]
+    ['OperatorSequence (selector)]
+    ['Keyword (selector)]
     ['KeywordSequence (selector)]
     [_ (parser-error "could not parse literal array value" "getObjectForCurrentLiteral")]))
 
 (define (literalString) (string))
 (define (literalChar)
+  ;(displayln `(literalChar ,sym ,text))
   (let ([val (string-ref text 0)])
     (expect 'STChar "literalChar")
     val))
 (define (selector)
+  ;(displayln `(selector ,sym ,text))
     (if (or (equal? sym 'OperatorSequence) (member? sym singleOps))
         (binarySelector)
         (if (or (equal? sym 'Keyword) (equal? sym 'KeywordSequence))
             (keywordSelector)
             (unarySelector))))
 (define (keywordSelector)
-  (member? keywordSelectorOps)
+  (expectOneOf sym keywordSelectorOps)
   text)
 (define (string)
   (expect 'STString "string")
@@ -486,7 +510,37 @@
                     variableName ". Arguments are read-only") "variableWrite")))))
 
 (define (test)
-  (define cgctx (new class-generation-context% [name "Array"] [superName "nil"]))
-  (next)
-  (time (classDef cgctx)))
+  ;(define cgctx (new class-generation-context% [name "Array"] [superName "nil"]))
+  ;(next)
+  ;(time (classDef cgctx))
+  (define files (find-files file-exists? "../SOM/Smalltalk"))
+  (for ([f files])
+    (when (not (member? (~a f) '(
+                                 "../SOM/Smalltalk/AST-Core/RBExplicitVariableParser.som"
+                                 ;"../SOM/Smalltalk/AST-Core/RBMessageNode.som"
+                                 "../SOM/Smalltalk/AST-Core/RBParseTreeSearcher.som"
+                                 "../SOM/Smalltalk/AST-Core/RBParser.som"
+                                 "../SOM/Smalltalk/AST-Core/RBPatternParser.som"
+                                 "../SOM/Smalltalk/AST-Core/RBPatternVariableNode.som"
+                                 ;"../SOM/Smalltalk/AST-Core/RBScanner.som"
+                                 ;"../SOM/Smalltalk/AST-Core/TRBProgramNodeVisitor.som"
+                                 ;"../SOM/Smalltalk/Collections/Streams/LimitedWriteStream.som"
+                                 "../SOM/Smalltalk/Collections/Streams/LimitingLineStreamWrapper.som"
+                                 "../SOM/Smalltalk/Collections/Streams/MultiByteBinaryOrTextStream.som"
+                                 "../SOM/Smalltalk/Collections/Streams/PositionableStream.som"
+                                 "../SOM/Smalltalk/AST-Core/RBPatternBlockNode.som"
+                                 "../SOM/Smalltalk/FileSystem/Core/FileLocator.som"
+                                 "../SOM/Smalltalk/FileSystem/Core/FileSystemDirectoryEntry.som"
+                                 "../SOM/Smalltalk/FileSystem/Core/FileSystemGuide.som"
+                                 "../SOM/Smalltalk/FileSystem/Core/PlatformResolver.som"
+                                 "../SOM/Smalltalk/FileSystem/Disk/WindowsStore.som"
+                                 "../SOM/Smalltalk/FileSystem/Streams/AsyncFile.som"
+                                 )))
+      (displayln `(parsing ,f))
+      (set! port (open-input-file f))
+      (set! nxt (lex port))
+      (next)
+      (with-handlers ([parse-exception? (lambda (err) (displayln `(error with ,f)))])
+        (time (classDef (new class-generation-context% [name "Array"] [superName "nil"])))))
+  ))
 (test)
