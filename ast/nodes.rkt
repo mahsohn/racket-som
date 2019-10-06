@@ -20,6 +20,8 @@
   )
 (define-generics executable
   (execute executable frame))
+(define-generics evaluatedExecutable
+  (executeEvaluated evaluatedExecutable frame obj))
 (define-generics tagged
   (markAsRootExpression tagged)
   (markAsLoopBody tagged)
@@ -59,6 +61,33 @@
    ]
   )
 
+
+
+(struct FieldNode ExpressionWithTagsNode ())
+(struct FieldReadNode FieldNode (self fieldIndex)
+  #:methods gen:evaluatedExecutable
+  [(define (executeEvaluated node frame obj) (void))])
+(struct FieldWriteNode FieldNode (self value fieldIndex)
+  #:methods gen:evaluatedExecutable
+  [(define (executeEvaluated node frame obj) (void))])
+
+(struct ContextualNode ExpressionWithTagsNode (contextLevel))
+(struct ThisContextNode ExpressionWithTagsNode ()
+  #:methods gen:executable
+  [(define (execute node frame) (void))])
+(struct LocalArgumentReadNode ExpressionWithTagsNode (argumentIndex)
+  #:methods gen:executable
+  [(define (execute node frame) (list-ref (frame-arguments frame) (LocalArgumentReadNode-argumentIndex node)))])
+(struct NonLocalArgumentReadNode ContextualNode (argumentIndex contextLevel)
+  #:methods gen:executable
+  [(define (execute node frame) (void))])
+(struct LocalSuperReadNode LocalArgumentReadNode (argumentIndex)
+  #:methods gen:executable
+  [(define (execute node frame) (void))])
+(struct NonLocalSuperReadNode NonLocalArgumentReadNode (holderClass ClassSide)
+  #:methods gen:executable
+  [(define (execute node frame) (void))])
+ 
 (struct SequenceNode ExpressionWithTagsNode (expressions)
   #:methods gen:executable;todo - execute all but last then return last execution
   [(define (execute node frame) (for ([expr (SequenceNode-expressions node)]) (execute expr frame)))]
@@ -83,10 +112,7 @@
   )
 (struct UninitializedMessageSendNode AbstractUninitializedMessageSendNode ());implementme
 
-(struct LocalArgumentReadNode ExpressionWithTagsNode (argumentIndex)
-  #:methods gen:executable
-  [(define (execute node frame) (list-ref (frame-arguments frame) (LocalArgumentReadNode-argumentIndex node)))]
-  )
+
 
 (struct GlobalNode ExpressionWithTagsNode (globalName)
   
@@ -230,7 +256,7 @@
  ; #:methods gen:write [(define (write self frame value) (setObject frame (LocalVariableNode-slot self) value))]
   )
 
-(struct ContextualNode ExpressionWithTagsNode (contextLevel frameType))
+
 (struct UninitializedVariableNode ContextualNode (variable)
   #:methods gen:executable [(define (execute self frame) (error "implement me"))]
   )
